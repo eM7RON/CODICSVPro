@@ -1,0 +1,1 @@
+pyinstaller codi_csv_processor.py -F -n "CODICSVPro" --noconsole --clean --distpath "BuildWindows"
