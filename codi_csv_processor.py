@@ -1,8 +1,10 @@
-import glob
+#!/usr/bin/python3
+
 import os
 import re
 import sys
 import time
+import threading
 
 import numpy as np
 import PySimpleGUI as sg
@@ -12,12 +14,24 @@ def readgen(fname):
     with open(fname, 'r') as f:
         for line in f.readlines():
             yield line
+            
+def console_timer(msg, expiry_time, window):
+    """
+    A worker thread that communicates with the GUI through a queue
+    This thread can block for as long as it wants and the GUI will not be affected
+    :param seconds: (int) How long to sleep, the ultimate blocking call
+    :param gui_queue: (queue.Queue) Queue to communicate back to GUI that task is completed
+    :return:
+    """
+    window['-CONSOLE-'].update(msg)
+    time.sleep(expiry_time) # sleep for a while
+    window['-CONSOLE-'].update(' ')  # put a message into queue for GUI
 
-def process_csv_files(input_dir, output_dir, labels):
-    os.chdir(input_dir)
-    files = glob.glob('*.{}'.format(EXTENSION))
-    for fname in files:
-        os.chdir(input_dir)
+def process_csv_files(input_files, output_dir, labels):
+    
+    os.chdir(output_dir)
+
+    for fname in input_files.split(';'):
         gen = readgen(fname)
         csv = []
 
@@ -35,8 +49,11 @@ def process_csv_files(input_dir, output_dir, labels):
                     else:
                         line = ''.join([line[:-1], ',' * (5 - length), '\n'])
                 csv.append(line)
-        os.chdir(output_dir)
-        fname = fname[:-4] + '_processed.csv'
+                
+        fname = os.path.basename(fname)
+        fname = os.path.splitext(fname)[0] + '_processed.csv'
+        fname = os.path.join(output_dir, fname)
+        
         with open(fname, 'w') as f:
             f.write(''.join(csv))
 
@@ -68,10 +85,26 @@ EXTENSION = 'csv'
 
 sg.theme('DarkAmber')   # Add a touch of color
 # All the stuff inside your window.
-input_dir = [[sg.Text('Input directory'), sg.In(size=(25, 1), enable_events=True, key='INPUTDIR'), sg.FolderBrowse()]]
-output_dir = [[sg.Text('Output directory'), sg.In(size=(25, 1), enable_events=True, key='OUTPUTDIR'), sg.FolderBrowse()]]
+input_files = [
+    [
+        sg.Text('Input file(s)'), 
+        sg.In(size=(25, 1), 
+        enable_events=True,
+        key='-INPUT-'), 
+        sg.FilesBrowse(file_types=[(EXTENSION, f"*.{EXTENSION}")])
+    ]
+]
+output_dir = [
+    [
+        sg.Text('Output directory'),
+        sg.In(size=(25, 1),
+        enable_events=True,
+        key='-OUTPUTDIR-'),
+        sg.FolderBrowse()
+    ]
+]
 layout = [
-    [sg.Column(input_dir)],
+    [sg.Column(input_files)],
     [sg.Column(output_dir)],
     [sg.Text('Enter values for:')],
     [sg.Text('Channel 0'), sg.InputText()],
@@ -81,7 +114,7 @@ layout = [
     [sg.Text('Channel 0, Channel 2'), sg.InputText()],
     [sg.Text('Channel 1, Channel 2'), sg.InputText()],
     [sg.Text('Channel 0, Channel 1, Channel 2'), sg.InputText()],
-    [sg.Text("", size=(0, 1), key='CONSOLE')],
+    [sg.Text("", size=(0, 1), key='-CONSOLE-')],
     [sg.Button('OK'), sg.Button('Cancel')]
 ]
 
@@ -92,14 +125,15 @@ if __name__ == '__main__':
     exe_time = time.time()
     # Event Loop to process "events" and get the "values" of the inputs
     while True:
+        window.refresh()
         event, values = window.read()
         if event == sg.WIN_CLOSED or event == 'Cancel': # if user closes window or clicks cancel
             break
-        elif event == 'INPUTDIR':
-            input_dir = values['INPUTDIR']
-        elif event == 'OUTPUTDIR':
-            output_dir = values['OUTPUTDIR']
-        elif event == "OK":
+        if event == '-INPUT-':
+            input_files = values['-INPUT-']
+        if event == '-OUTPUTDIR-':
+            output_dir = values['-OUTPUTDIR-']
+        if event == "OK":
             if all(map(str.strip, [values[key] for key in input_key_list])):
                 labels = np.array(
                     [
@@ -114,14 +148,11 @@ if __name__ == '__main__':
                         "Total Positive"
                     ]
                 )
-                process_csv_files(input_dir, output_dir, labels)
-                window['CONSOLE'].update(value='Done!')
-                exe_time = time.time()
+                threading.Thread(target=process_csv_files, args=(input_files, output_dir, labels), daemon=True).start()
+                msg, expiry_time = f'Done! Your processed files are in the output directory.', 7
             else:
-                window['CONSOLE'].update(value='Please check input values')
-                exe_time = time.time()
-        elif time.time() > exe_time + 5:
-            window['CONSOLE'].update(value=' ')
-        window.refresh()
+                msg, expiry_time = 'Please check input values!', 2
+            threading.Thread(target=console_timer, args=(msg, expiry_time, window), daemon=True).start()
 
     window.close()
+    sys.exit()
